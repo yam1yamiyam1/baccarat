@@ -1,72 +1,95 @@
-"""Standalone visual test for ROI detection."""
+"""Debug script to visually test the BoxFinder using a transparent overlay."""
 
-import time
+import os
+import sys
+import tkinter as tk
 
-import cv2
+# Ensure we can import from the parent directory
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from box_finder import BoxFinder
 from capture import ScreenCapturer
 
 
-WINDOW_NAME = "Box Finder Debug"
-ROI_COLOR_BGR = (0, 255, 255)
-ROI_THICKNESS = 2
-SEARCH_REGION_COLOR_BGR = (255, 0, 0)
-STATUS_COLOR_BGR = (255, 255, 255)
-SEARCH_REGION_THICKNESS = 2
-STATUS_POSITION = (16, 30)
+class DebugOverlay:
+    """Transparent Tkinter overlay for testing bounding box detection."""
 
+    def __init__(self) -> None:
+        """Initialize the transparent window, canvas, and vision modules."""
+        self.root = tk.Tk()
+        self.root.title("Box Finder Debug")
+        
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # Configure fullscreen, transparent, always-on-top window
+        self.root.geometry(f"{screen_width}x{screen_height}+0+0")
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.attributes("-transparentcolor", config.DEBUG_BG_COLOR)
+        self.root.config(bg=config.DEBUG_BG_COLOR)
+        
+        self.root.bind("<Escape>", lambda e: self.root.destroy())
 
-def main() -> None:
-    """Capture frames, detect ROI, and render detection overlays."""
-    screen_capturer = ScreenCapturer(monitor_index=1)
-    box_finder = BoxFinder()
-
-    while True:
-        time.sleep(config.SCAN_INTERVAL_MS / 1000.0)
-
-        capture_result = screen_capturer.grab_frame()
-        frame = capture_result.frame
-        roi_result = box_finder.find_roi(capture_result)
-        frame_height, frame_width = frame.shape[:2]
-
-        search_top = int(frame_height * config.SEARCH_REGION_Y_START)
-        search_right = int(frame_width * config.SEARCH_REGION_X_END)
-        cv2.rectangle(
-            frame,
-            (0, search_top),
-            (search_right, frame_height),
-            SEARCH_REGION_COLOR_BGR,
-            SEARCH_REGION_THICKNESS,
+        self.canvas = tk.Canvas(
+            self.root, 
+            bg=config.DEBUG_BG_COLOR, 
+            width=screen_width, 
+            height=screen_height, 
+            highlightthickness=0
         )
+        self.canvas.pack()
+
+        # Initialize pipeline modules
+        self.capturer = ScreenCapturer(monitor_index=1)
+        self.box_finder = BoxFinder()
+
+    def update_loop(self) -> None:
+        """Grab frame, find ROI, draw it on canvas, and schedule next run."""
+        # Clear previous drawings to prevent ghosting
+        self.canvas.delete("all")
+
+        capture_result = self.capturer.grab_frame()
+        roi_result = self.box_finder.find_roi(capture_result)
 
         if roi_result is not None and roi_result.is_valid:
-            x, y, width, height = roi_result.rect
-            top_left = (x, y)
-            bottom_right = (x + width, y + height)
-            cv2.rectangle(frame, top_left, bottom_right, ROI_COLOR_BGR, ROI_THICKNESS)
-            status_text = "ROI detected (yellow box)"
+            box_x, box_y, box_w, box_h = roi_result.rect
+            
+            # Draw highly visible dashed outline around detected bead road
+            self.canvas.create_rectangle(
+                box_x, box_y, box_x + box_w, box_y + box_h,
+                outline=config.DEBUG_BOX_COLOR, 
+                width=config.DEBUG_LINE_WIDTH,
+                dash=(4, 4)
+            )
+            
+            self.canvas.create_text(
+                box_x, box_y - config.DEBUG_TEXT_PAD,
+                text=f"ROI FOUND [{box_w}x{box_h}] (ESC to exit)",
+                fill=config.DEBUG_BOX_COLOR,
+                anchor="w",
+                font=config.DEBUG_FONT
+            )
         else:
-            status_text = "No ROI detected yet"
+            # Show red fallback text so we know the loop is actually running
+            self.canvas.create_text(
+                config.DEBUG_TEXT_PAD, config.DEBUG_TEXT_PAD,
+                text="Searching for Bead Road... (ESC to exit)",
+                fill=config.DEBUG_TEXT_COLOR,
+                anchor="nw",
+                font=config.DEBUG_FONT
+            )
 
-        cv2.putText(
-            frame,
-            status_text,
-            STATUS_POSITION,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            STATUS_COLOR_BGR,
-            2,
-            cv2.LINE_AA,
-        )
+        # Re-schedule this method to run again
+        self.root.after(config.SCAN_INTERVAL_MS, self.update_loop)
 
-        cv2.imshow(WINDOW_NAME, frame)
-        if (cv2.waitKey(1) & 0xFF) == ord("q"):
-            break
-
-    cv2.destroyAllWindows()
+    def run(self) -> None:
+        """Start the Tkinter main loop and trigger the first update."""
+        self.root.after(config.SCAN_INTERVAL_MS, self.update_loop)
+        self.root.mainloop()
 
 
 if __name__ == "__main__":
-    main()
+    overlay = DebugOverlay()
+    overlay.run()
