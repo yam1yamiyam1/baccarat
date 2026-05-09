@@ -1,7 +1,6 @@
-"""ROI detection strategies for locating the baccarat bead plate."""
+"""Module for detecting the baccarat bead road bounding box on screen."""
 
 from dataclasses import dataclass
-
 import cv2
 import numpy as np
 
@@ -11,87 +10,116 @@ from capture import CaptureResult
 
 @dataclass
 class RoiResult:
-    """Contains the detected ROI rectangle and strategy metadata."""
+    """Holds the result of a region of interest (ROI) search."""
 
-    rect: tuple[int, int, int, int]
+    rect: tuple[int, int, int, int]  # (x, y, width, height)
     confidence: float
     strategy: str
     is_valid: bool
 
 
 class BoxFinder:
-    """Finds the bead-plate ROI from a full captured frame."""
+    """Detects and tracks the bead road bounding box."""
 
     def __init__(self) -> None:
-        """Initialize state for future lock/miss strategies."""
+        """Initialize BoxFinder state."""
         self.locked_rect: tuple[int, int, int, int] | None = None
-        self.miss_count = 0
+        self.miss_count: int = 0
 
-    def _validate_rect(
-        self,
-        x: int,
-        y: int,
-        w: int,
-        h: int,
-        frame_w: int,
-        frame_h: int,
-    ) -> bool:
-        """Validate rectangle geometry and expected bottom-left placement."""
-        if h <= 0:
+    def _validate_rect(self, box_x: int, box_y: int, box_w: int, box_h: int, frame_w: int, frame_h: int) -> bool:
+        """Check if a bounding box meets the physical requirements of a bead road."""
+        box_area = box_w * box_h
+        if box_area < config.MIN_BOX_AREA:
             return False
 
-        area = w * h
-        if area <= config.MIN_BOX_AREA:
+        aspect_ratio = box_w / float(box_h)
+        if not (config.ASPECT_MIN <= aspect_ratio <= config.ASPECT_MAX):
             return False
 
-        aspect_ratio = w / h
-        if aspect_ratio < config.ASPECT_MIN or aspect_ratio > config.ASPECT_MAX:
+        # Ensure it falls within the expected bottom-left screen quadrant
+        if box_y < (frame_h * config.SEARCH_REGION_Y_START):
+            return False
+        
+        if box_x > (frame_w * config.SEARCH_REGION_X_END):
             return False
 
-        region_y_start = int(frame_h * config.SEARCH_REGION_Y_START)
-        region_x_end = int(frame_w * config.SEARCH_REGION_X_END)
+        return True
 
-        return x >= 0 and y >= region_y_start and x + w <= region_x_end and y + h <= frame_h
+    def _trim_chat_bar(self, gray_frame: np.ndarray, box_x: int, box_y: int, box_w: int, box_h: int) -> tuple[int, int, int, int]:
+        """Scan from the top of the box down to remove the dark chat input bar."""
+        roi_gray = gray_frame[box_y : box_y + box_h, box_x : box_x + box_w]
+        
+        scan_limit = int(box_h * config.TRIM_SCAN_LIMIT_RATIO)
+        has_hit_dark_bar = False
+        
+        # Scan row by row from the top of the detected box
+        for row_index in range(scan_limit):
+            row_mean = np.mean(roi_gray[row_index, :])
+            
+            # Identify the dark grey background of the input field
+            if row_mean < config.TRIM_DARK_THRESH:
+                has_hit_dark_bar = True
+            
+            # Once passed the dark bar, the first bright white row is our true top boundary
+            if has_hit_dark_bar and row_mean > config.TRIM_WHITE_THRESH:
+                new_y = box_y + row_index
+                new_h = box_h - row_index
+                return (box_x, new_y, box_w, new_h)
+                
+        # Return original coordinates if no chat bar signature was found
+        return (box_x, box_y, box_w, box_h)
 
     def _strategy_1_white_morphology(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
-        """Find a white-ish table region in the configured search quadrant."""
-        frame_height, frame_width = frame.shape[:2]
-        search_y_start = int(frame_height * config.SEARCH_REGION_Y_START)
-        search_x_end = int(frame_width * config.SEARCH_REGION_X_END)
-
-        search_region = frame[search_y_start:frame_height, 0:search_x_end]
-        gray_search_region = cv2.cvtColor(search_region, cv2.COLOR_BGR2GRAY)
-        _, thresholded_region = cv2.threshold(
-            gray_search_region, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-
-        # A close operation bridges small dark gaps between bright bead dots.
+        """Find the box by looking for large, wide, white shapes in the search region."""
+        frame_h, frame_w = frame.shape[:2]
+        
+        # Crop to bottom-left to save processing power and ignore other UI elements
+        crop_y1 = int(frame_h * config.SEARCH_REGION_Y_START)
+        crop_x2 = int(frame_w * config.SEARCH_REGION_X_END)
+        cropped_frame = frame[crop_y1:frame_h, 0:crop_x2]
+        
+        gray = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, config.WHITE_THRESH, 255, cv2.THRESH_BINARY)
+        
+        # Use a large morphological CLOSE to fill the gaps between the bead dots
         kernel = np.ones((config.MORPH_KERNEL_SIZE, config.MORPH_KERNEL_SIZE), np.uint8)
-        closed_region = cv2.morphologyEx(thresholded_region, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(closed_region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        valid_rectangles: list[tuple[int, int, int, int]] = []
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        valid_candidates = []
         for contour in contours:
-            local_x, local_y, width, height = cv2.boundingRect(contour)
-            global_x = local_x
-            global_y = local_y + search_y_start
-            if self._validate_rect(global_x, global_y, width, height, frame_width, frame_height):
-                valid_rectangles.append((global_x, global_y, width, height))
-
-        if not valid_rectangles:
+            crop_x, crop_y, box_w, box_h = cv2.boundingRect(contour)
+            
+            # Map cropped coordinates back to the full monitor frame coordinates
+            box_x = crop_x
+            box_y = crop_y + crop_y1
+            
+            if self._validate_rect(box_x, box_y, box_w, box_h, frame_w, frame_h):
+                valid_candidates.append((box_x, box_y, box_w, box_h))
+                
+        if not valid_candidates:
             return None
-
-        return min(valid_rectangles, key=lambda rect: rect[0])
+            
+        # The bead road is always the furthest left element
+        best_rect = min(valid_candidates, key=lambda rect: rect[0])
+        
+        # Convert full frame to gray once for the trimming method
+        full_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        trimmed_rect = self._trim_chat_bar(full_gray, *best_rect)
+        
+        return trimmed_rect
 
     def find_roi(self, capture: CaptureResult) -> RoiResult | None:
-        """Run ROI strategies and return the highest-confidence result."""
-        detected_rect = self._strategy_1_white_morphology(capture.frame)
-        if detected_rect is None:
-            return None
-
-        return RoiResult(
-            rect=detected_rect,
-            confidence=0.9,
-            strategy="S1_white",
-            is_valid=True,
-        )
+        """Execute the strategy cascade to locate the bead road."""
+        best_rect = self._strategy_1_white_morphology(capture.frame)
+        
+        if best_rect is not None:
+            return RoiResult(
+                rect=best_rect,
+                confidence=0.9,
+                strategy="S1_white",
+                is_valid=True
+            )
+            
+        return None
