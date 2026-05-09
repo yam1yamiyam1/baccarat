@@ -4,6 +4,16 @@ import os
 import sys
 import tkinter as tk
 
+# ── FIX FOR WINDOWS DPI SCALING ──────────────────────────────────────────────
+# This prevents Tkinter from scaling the coordinates differently than mss,
+# ensuring the bottom and sides of the rectangle are actually drawn on screen.
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    pass
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Ensure we can import from the parent directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -56,12 +66,18 @@ class DebugOverlay:
         if roi_result is not None and roi_result.is_valid:
             box_x, box_y, box_w, box_h = roi_result.rect
             
-            # Draw highly visible dashed outline around detected bead road
+            # Inset drawing so the stroke isn't clipped by the edges of the box
+            inset = config.DEBUG_LINE_WIDTH // 2
+            draw_x1 = box_x + inset
+            draw_y1 = box_y + inset
+            draw_x2 = box_x + box_w - inset
+            draw_y2 = box_y + box_h - inset
+            
+            # Draw highly visible SOLID enclosed box
             self.canvas.create_rectangle(
-                box_x, box_y, box_x + box_w, box_y + box_h,
+                draw_x1, draw_y1, draw_x2, draw_y2,
                 outline=config.DEBUG_BOX_COLOR, 
-                width=config.DEBUG_LINE_WIDTH,
-                dash=(4, 4)
+                width=config.DEBUG_LINE_WIDTH
             )
             
             self.canvas.create_text(
