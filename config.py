@@ -25,3 +25,10 @@ DEBUG_TEXT_COLOR = "red"
 DEBUG_LINE_WIDTH = 3
 DEBUG_FONT = ("Consolas", 12, "bold")
 DEBUG_TEXT_PAD = 10
+
+# ── lock settings ────────────────────────────
+LOCK_KEEP_THRESH = 180        # Min average brightness to maintain the box lock
+MAX_MISS_COUNT = 3            # Frames to wait before dropping a locked box
+
+# (Update your DEBUG_LINE_WIDTH to 5 if you like the thicker line)
+DEBUG_LINE_WIDTH = 5

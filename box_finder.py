@@ -112,14 +112,40 @@ class BoxFinder:
 
     def find_roi(self, capture: CaptureResult) -> RoiResult | None:
         """Execute the strategy cascade to locate the bead road."""
-        best_rect = self._strategy_1_white_morphology(capture.frame)
-        
-        if best_rect is not None:
-            return RoiResult(
-                rect=best_rect,
-                confidence=0.9,
-                strategy="S1_white",
-                is_valid=True
-            )
+        frame_h, frame_w = capture.frame.shape[:2]
+
+        # 1. Fast Verify: If we already have a locked box, check if it's still there
+        if self.locked_rect is not None:
+            box_x, box_y, box_w, box_h = self.locked_rect
+            
+            # Ensure it's still within screen bounds (in case resolution changed)
+            if box_x + box_w <= frame_w and box_y + box_h <= frame_h:
+                roi = capture.frame[box_y:box_y+box_h, box_x:box_x+box_w]
+                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                
+                # If the area is still predominantly white, keep the lock!
+                if np.mean(gray_roi) > config.LOCK_KEEP_THRESH:
+                    self.miss_count = 0
+                    return RoiResult(rect=self.locked_rect, confidence=0.99, strategy="locked", is_valid=True)
+            
+            # Box is no longer white (user moved window, etc.)
+            self.miss_count += 1
+            if self.miss_count >= config.MAX_MISS_COUNT:
+                self.locked_rect = None
+
+        # 2. Full Search: Only runs if we don't have a lock
+        if self.locked_rect is None:
+            best_rect = self._strategy_1_white_morphology(capture.frame)
+            
+            if best_rect is not None:
+                # Lock onto this rectangle so we stop twitching on future frames
+                self.locked_rect = best_rect
+                self.miss_count = 0
+                return RoiResult(
+                    rect=best_rect,
+                    confidence=0.9,
+                    strategy="S1_white",
+                    is_valid=True
+                )
             
         return None
