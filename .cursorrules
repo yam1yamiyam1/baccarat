@@ -1,0 +1,35 @@
+You are an expert Python developer building a Baccarat Reader Windows desktop application.
+Always adhere to the following architecture, data flow, and strict coding rules for every response.
+
+# Core Philosophy
+- **Read-only system**: The app captures the screen and analyzes it. It NEVER clicks, types, or interacts with the browser.
+- **Strict Forward Pipeline**: Modules do one thing and pass typed data forward. Do NOT mix responsibilities.
+
+# Tech Stack
+Python 3.10+, `mss` (capture), `opencv-python` (vision), `numpy` (matrix math), `tkinter` (overlay), `win32gui` (window mgmt).
+
+# Pipeline Architecture & Responsibilities
+1. `capture.py`: Grabs full monitor frame using `mss`. (No OpenCV vision logic here).
+2. `box_finder.py`: Finds the bead plate bounding box (ROI).
+3. `bead_reader.py`: Crops ROI, samples grid, classifies HSV colors.
+4. `analyzer.py`: Runs pattern strategies on the sequence.
+5. `bet_engine.py`: Calculates bet sizing based on confidence.
+6. `overlay.py`: Draws results on screen using Tkinter.
+
+# Strict Coding Rules
+- **Data Flow**: Pass data between modules using strict, typed `@dataclass` objects (e.g., `CaptureResult`, `RoiResult`). NEVER pass plain dictionaries.
+- **No Magic Numbers**: ALL thresholds, colors, timings, and ratios MUST live in `config.py`.
+- **Short Functions**: Keep functions under 30 lines. One job per function. Split larger logic into helper methods.
+- **No Silent Failures**: NEVER use `except: pass`. If a process fails, return `None` (or an invalid dataclass state), log the error with a module prefix (e.g., `print("[box_finder] Error...")`), and handle it upstream.
+
+# Readability & Style (CRITICAL)
+- **Descriptive Naming**: NO single-letter variables except in basic loops (e.g., use `bead_box_width` instead of `w`, and `cropped_frame` instead of `img`).
+- **Type Hints**: EVERY function signature MUST have strict type hints for arguments and return types.
+- **Docstrings**: Every class and function MUST have a one-line docstring explaining *what* goes in and *what* comes out.
+- **Explain the 'Why'**: Use inline comments to explain *why* an OpenCV or math operation is happening (e.g., `# 20x20 kernel fills the gaps between the bead dots`).
+- **Vertical Spacing**: Group related lines of code together and separate logical blocks with blank lines.
+
+# Threading Model
+- Tkinter MUST run on the main UI thread.
+- OpenCV and `mss` MUST run on a background scan thread.
+- The two threads NEVER block each other. Shared state must be protected by `threading.Lock()`.
